@@ -1,46 +1,65 @@
 "use strict";
-import * as vscode from "vscode";
-import { TextEditorSelectionChangeKind } from "vscode";
+import { window, workspace, commands, ConfigurationChangeEvent, Disposable, ExtensionContext, TextEditorSelectionChangeKind, TextEditorSelectionChangeEvent, WorkspaceConfiguration } from "vscode";
 
-var lastSelectionTime = -1;
-
-export function activate(context: vscode.ExtensionContext) {
-	let config = vscode.workspace.getConfiguration("vtools");
-	if (config.autoHideSideBar || config.autoHideBottomBar) {
-		vscode.window.onDidChangeTextEditorSelection(selection=> {
-			// if selection was not from a click, or if there are no selections, return
-			if (selection.kind != TextEditorSelectionChangeKind.Mouse || selection.selections.length == 0) return;
-
-			// if at least one editor's selection is a single-position (ie. not a segment of text), perform the bar hiding
-			var singlePos = selection.selections.find(a=>a.isEmpty) != null;
-			var thisSelectionTime = Date.now();
-			if (singlePos) {
-				setTimeout(function() {
-					// if the selection changed during the delay-time, cancel the bar hiding
-					if (lastSelectionTime != thisSelectionTime) return;
-
-					if (config.autoHideSideBar) {
-						// alternate "show sidebar" commands
-						//vscode.commands.executeCommand("workbench.files.action.focusFilesExplorer");
-						//vscode.commands.executeCommand("workbench.extensions.action.showInstalledExtensions");
-						
-						//vscode.commands.executeCommand("workbench.view.search");
-						vscode.commands.executeCommand("workbench.action.focusSideBar");
-						vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
-					}
-
-					let path = vscode.window.activeTextEditor.document.fileName;
-					let pathIsFile = path.includes(".") || path.includes("\\") || path.includes("/");
-					if (config.autoHideBottomBar && pathIsFile) {
-						//vscode.commands.executeCommand("workbench.action.terminal.focus");
-						vscode.commands.executeCommand("workbench.action.focusPanel");
-						vscode.commands.executeCommand("workbench.action.togglePanel");
-					}
-				}, vscode.workspace.getConfiguration("vtools").autoHideDelay);
-			}
-			lastSelectionTime = thisSelectionTime;
-		});
-	}
+export function activate(context: ExtensionContext) {
+	let vTools = new VTools();
+	context.subscriptions.push(vTools);
 }
-export function deactivate() {
+
+class VTools {
+	private _config: WorkspaceConfiguration;
+	private _disposable: Disposable;
+	private _timer: NodeJS.Timer;
+
+	constructor() {
+		let subscriptions: Disposable[] = [];
+		this._config = workspace.getConfiguration("vtools");
+		window.onDidChangeTextEditorSelection(this._onUpdateSelection, this, subscriptions);
+		workspace.onDidChangeConfiguration(this._onUpdateConfiguration, this, subscriptions);
+
+		this._disposable = Disposable.from(...subscriptions);
+	}
+
+	private _onUpdateConfiguration(e: ConfigurationChangeEvent) {
+		if (e.affectsConfiguration("vtools")) {
+			this._config = workspace.getConfiguration("vtools");
+		}
+	}
+
+	private _onUpdateSelection(e: TextEditorSelectionChangeEvent) {
+		// if selection was not from a click, or if there are no selections, return
+		if (e.kind != TextEditorSelectionChangeKind.Mouse || e.selections.length == 0) return;
+
+		// if selection is not a single-position (ie. not a segment of text), return
+		var singlePos = e.selections.find(a => a.isEmpty) != null;
+		if (!singlePos) return;
+
+		// debounce using delay
+		if (this._timer) {
+			clearTimeout(this._timer);
+		}
+		this._timer = setTimeout(() => this._update(), this._config.autoHideDelay)
+	}
+
+	private _update() {
+		this._timer = undefined;
+		let scheme = window.activeTextEditor.document.uri.scheme;
+		let schemeIsFile = scheme == "file" || scheme == "untitled";
+		// if the current editor is not a file, return;
+		if (!schemeIsFile) return;
+
+		if (this._config.autoHideSideBar) {
+			commands.executeCommand("workbench.action.focusSideBar");
+			commands.executeCommand("workbench.action.toggleSidebarVisibility");
+		}
+
+		if (this._config.autoHideBottomBar) {
+			commands.executeCommand("workbench.action.focusPanel");
+			commands.executeCommand("workbench.action.togglePanel");
+		}
+	}
+
+	public dispose() {
+		this._disposable.dispose();
+	}
 }
